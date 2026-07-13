@@ -64,6 +64,8 @@
 .copy-editor textarea { background: var(--surface-sunken); border: 1px solid var(--border); line-height: 1.55; min-height: 118px; padding: 12px; resize: vertical; }
 .project-bar input:hover, .copy-editor input:hover, .copy-editor textarea:hover { border-color: var(--accent); }
 .project-bar p { color: var(--text-muted); font-size: 12px; line-height: 1.5; margin: 0 0 7px; max-width: 430px; }
+.project-actions { align-items: flex-end; display: flex; gap: 18px; justify-content: space-between; }
+.project-actions .button { flex: 0 0 auto; }
 
 .notice { align-items: center; background: #27311d; border: 1px solid #58703a; color: #e3f5b0; display: flex; font-size: 13px; gap: 16px; justify-content: space-between; margin-top: 18px; padding: 11px 13px; }
 .notice.error { background: var(--danger-surface); border-color: #8f4b43; color: #ffd1ca; }
@@ -269,6 +271,7 @@
   .topbar-note { display: none; }
   .project-bar, .work-grid, .share-grid { grid-template-columns: 1fr; }
   .comparison-grid { grid-template-columns: 1fr; }
+  .project-actions { align-items: flex-start; flex-direction: column; gap: 10px; }
   .project-bar { gap: 14px; }
   .project-bar p { margin: 0; }
   .triage-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }

@@ -58,7 +58,7 @@ async function toDerivativePayload(asset: MediaAsset): Promise<{ id: string; nam
   }
 }
 
-export async function analyseProjectPhotos(projectName: string, assets: MediaAsset[], userEditBrief: UserEditBrief, apiKey?: string): Promise<PhotoAnalysis> {
+export async function analyseProjectPhotos(projectName: string, assets: MediaAsset[], userEditBrief: UserEditBrief, apiKey?: string, signal?: AbortSignal): Promise<PhotoAnalysis> {
   const selectedAssets = assets.filter((asset) => asset.selected).slice(0, 6)
   if (selectedAssets.length === 0) {
     throw new Error('Select at least one image before starting Gemini review.')
@@ -73,6 +73,7 @@ export async function analyseProjectPhotos(projectName: string, assets: MediaAss
       apiKey: apiKey?.trim() || undefined,
       userEditBrief,
     }),
+    signal,
   })
 
   const body = await response.json().catch(() => ({})) as PhotoAnalysis & { error?: string }
@@ -82,7 +83,7 @@ export async function analyseProjectPhotos(projectName: string, assets: MediaAss
   return body
 }
 
-export async function createPhotoDerivative(asset: MediaAsset, userEditBrief: UserEditBrief, instructions: string[], apiKey?: string): Promise<Blob> {
+export async function createPhotoDerivative(asset: MediaAsset, userEditBrief: UserEditBrief, instructions: string[], apiKey?: string, signal?: AbortSignal): Promise<Blob> {
   const response = await fetch('/api/create-photo-derivative', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -93,6 +94,7 @@ export async function createPhotoDerivative(asset: MediaAsset, userEditBrief: Us
       instructions,
       apiKey: apiKey?.trim() || undefined,
     }),
+    signal,
   })
   const body = await response.json().catch(() => ({})) as { error?: string; image?: { data: string; mimeType: string } }
   if (!response.ok || !body.image) {

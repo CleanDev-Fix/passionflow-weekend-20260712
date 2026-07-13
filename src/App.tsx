@@ -24,6 +24,7 @@ function App() {
   const derivativeInputRef = useRef<HTMLInputElement>(null)
   const assetsRef = useRef<MediaAsset[]>([])
   const derivativesRef = useRef<MediaDerivative[]>([])
+  const geminiAbortRef = useRef<AbortController | null>(null)
   const [projectName, setProjectName] = useState('Vintage camera restoration')
   const [editBrief, setEditBrief] = useState({ desiredOutcome: '', preservationConstraints: '' })
   const [geminiApiKey, setGeminiApiKey] = useState('')
@@ -38,8 +39,9 @@ function App() {
   const [derivatives, setDerivatives] = useState<MediaDerivative[]>([])
   const [derivativeTargetId, setDerivativeTargetId] = useState<string | null>(null)
   const [comparisonAssetId, setComparisonAssetId] = useState<string | null>(null)
-  const [pendingAction, setPendingAction] = useState<'gemini' | 'zip' | 'folder' | 'receipt' | 'editorSetup' | null>(null)
-  const [busy, setBusy] = useState<'upload' | 'gemini' | 'imageEdit' | 'render' | 'export' | 'editor' | 'receipt' | null>(null)
+  const [pendingAction, setPendingAction] = useState<'gemini' | 'applyEdits' | 'zip' | 'folder' | 'receipt' | 'editorSetup' | null>(null)
+  const [busy, setBusy] = useState<'upload' | 'gemini' | 'imageEdit' | 'batchImageEdit' | 'render' | 'export' | 'editor' | 'receipt' | null>(null)
+  const [batchEditProgress, setBatchEditProgress] = useState<{ completed: number; total: number } | null>(null)
   const [deliveryComplete, setDeliveryComplete] = useState(false)
   const [walletPublicKey, setWalletPublicKey] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<CreatorReceipt | null>(null)
@@ -53,6 +55,62 @@ function App() {
     setDeliveryComplete(false)
     setReceipt(null)
     setReceiptDraft(null)
+  }
+
+  function beginGeminiRequest(): AbortController {
+    geminiAbortRef.current?.abort()
+    const controller = new AbortController()
+    geminiAbortRef.current = controller
+    return controller
+  }
+
+  function finishGeminiRequest(controller: AbortController): void {
+    if (geminiAbortRef.current === controller) {
+      geminiAbortRef.current = null
+      setBusy(null)
+    }
+  }
+
+  function resetPhotoProject(): void {
+    geminiAbortRef.current?.abort()
+    geminiAbortRef.current = null
+    assetsRef.current.forEach((asset) => URL.revokeObjectURL(asset.previewUrl))
+    derivativesRef.current.forEach((derivative) => URL.revokeObjectURL(derivative.previewUrl))
+    if (sharePreviewUrl) {
+      URL.revokeObjectURL(sharePreviewUrl)
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = ''
+    }
+    if (derivativeInputRef.current) {
+      derivativeInputRef.current.value = ''
+    }
+    setProjectName('New passion project')
+    setEditBrief({ desiredOutcome: '', preservationConstraints: '' })
+    setGeminiApiKey('')
+    setAssets([])
+    setAnalysis(null)
+    setTopText('')
+    setBottomText('')
+    setShareCaption('')
+    setShareImage(null)
+    setSharePreviewUrl(null)
+    setHeroAssetId(null)
+    setDerivatives([])
+    setDerivativeTargetId(null)
+    setComparisonAssetId(null)
+    setPendingAction(null)
+    setBusy(null)
+    setBatchEditProgress(null)
+    setDeliveryComplete(false)
+    setWalletPublicKey(null)
+    setReceipt(null)
+    setReceiptDraft(null)
+    setError(null)
+    setNotice('New project ready. Add photos or take a new one to begin again.')
   }
 
   const selectedAssets = useMemo(() => assets.filter((asset) => asset.selected), [assets])
@@ -204,6 +262,27 @@ function App() {
     setNotice(`Editor result added for comparison. The original ${file.name} remains unchanged.`)
   }
 
+  function storeDerivative(nextDerivative: MediaDerivative): void {
+    setDerivatives((current) => {
+      current.filter((derivative) => derivative.originalAssetId === nextDerivative.originalAssetId).forEach((derivative) => URL.revokeObjectURL(derivative.previewUrl))
+      return [...current.filter((derivative) => derivative.originalAssetId !== nextDerivative.originalAssetId), nextDerivative]
+    })
+  }
+
+  async function requestAiDerivative(asset: MediaAsset, instructions: string[], signal: AbortSignal): Promise<MediaDerivative> {
+    const image = await createPhotoDerivative(asset, editBrief, instructions, geminiApiKey, signal)
+    const extension = image.type.split('/')[1] || 'png'
+    const file = new File([image], `${asset.file.name.replace(/\.[^.]+$/, '')}-ai-derivative.${extension}`, { type: image.type })
+    return {
+      id: crypto.randomUUID(),
+      originalAssetId: asset.id,
+      file,
+      previewUrl: URL.createObjectURL(file),
+      status: 'returned',
+      reworkNotes: '',
+    }
+  }
+
   async function createAiDerivative(asset: MediaAsset): Promise<void> {
     const instructions = analysis?.editInstructions.find((candidate) => candidate.assetId === asset.id)?.instructions ?? []
     if (!editBrief.desiredOutcome.trim() || instructions.length === 0) {
@@ -211,31 +290,78 @@ function App() {
       return
     }
 
+    const controller = beginGeminiRequest()
     setBusy('imageEdit')
     setError(null)
     try {
-      const image = await createPhotoDerivative(asset, editBrief, instructions, geminiApiKey)
-      const extension = image.type.split('/')[1] || 'png'
-      const file = new File([image], `${asset.file.name.replace(/\.[^.]+$/, '')}-ai-derivative.${extension}`, { type: image.type })
-      const nextDerivative: MediaDerivative = {
-        id: crypto.randomUUID(),
-        originalAssetId: asset.id,
-        file,
-        previewUrl: URL.createObjectURL(file),
-        status: 'returned',
-        reworkNotes: '',
+      const nextDerivative = await requestAiDerivative(asset, instructions, controller.signal)
+      if (controller.signal.aborted) {
+        return
       }
-      setDerivatives((current) => {
-        current.filter((derivative) => derivative.originalAssetId === asset.id).forEach((derivative) => URL.revokeObjectURL(derivative.previewUrl))
-        return [...current.filter((derivative) => derivative.originalAssetId !== asset.id), nextDerivative]
-      })
+      storeDerivative(nextDerivative)
       setComparisonAssetId(asset.id)
       invalidateDelivery()
       setNotice('AI derivative ready for comparison. The original file remains unchanged.')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'The AI editor could not create a derivative. Your original remains local.')
+      if (!controller.signal.aborted) {
+        setError(reason instanceof Error ? reason.message : 'The AI editor could not create a derivative. Your original remains local.')
+      }
     } finally {
-      setBusy(null)
+      finishGeminiRequest(controller)
+    }
+  }
+
+  async function createPlannedAiDerivatives(): Promise<void> {
+    setPendingAction(null)
+    const instructionsByAssetId = new Map(analysis?.editInstructions.map((item) => [item.assetId, item.instructions]) ?? [])
+    const targets = assets.filter((asset) => analysis?.photoAssessments.some((assessment) => assessment.assetId === asset.id && assessment.keep) && (instructionsByAssetId.get(asset.id)?.length ?? 0) > 0)
+    if (!editBrief.desiredOutcome.trim() || targets.length === 0) {
+      setError('Gemini did not recommend any photos with editable instructions. Revise the brief and build a new plan.')
+      return
+    }
+
+    const controller = beginGeminiRequest()
+    setBusy('batchImageEdit')
+    setBatchEditProgress({ completed: 0, total: targets.length })
+    setError(null)
+    let completed = 0
+    let lastDerivativeAssetId: string | null = null
+    const failedNames: string[] = []
+    try {
+      for (const asset of targets) {
+        if (controller.signal.aborted) {
+          return
+        }
+        try {
+          const nextDerivative = await requestAiDerivative(asset, instructionsByAssetId.get(asset.id) ?? [], controller.signal)
+          if (controller.signal.aborted) {
+            return
+          }
+          storeDerivative(nextDerivative)
+          completed += 1
+          lastDerivativeAssetId = asset.id
+        } catch {
+          if (controller.signal.aborted) {
+            return
+          }
+          failedNames.push(asset.file.name)
+        } finally {
+          if (!controller.signal.aborted) {
+            setBatchEditProgress({ completed: completed + failedNames.length, total: targets.length })
+          }
+        }
+      }
+      setBatchEditProgress(null)
+      if (completed > 0) {
+        setComparisonAssetId(lastDerivativeAssetId)
+        invalidateDelivery()
+        setNotice(`${completed} AI ${completed === 1 ? 'derivative is' : 'derivatives are'} ready for review. Originals remain unchanged.`)
+      }
+      if (failedNames.length > 0) {
+        setError(`Could not create ${failedNames.length} AI ${failedNames.length === 1 ? 'derivative' : 'derivatives'}: ${failedNames.join(', ')}. Other completed derivatives remain available.`)
+      }
+    } finally {
+      finishGeminiRequest(controller)
     }
   }
 
@@ -248,7 +374,7 @@ function App() {
     setDerivatives((current) => current.map((derivative) => derivative.id === derivativeId ? { ...derivative, reworkNotes } : derivative))
   }
 
-  function applyGeminiPlan(): void {
+  function applyGeminiPlanToQueue(): void {
     if (!analysis) {
       return
     }
@@ -262,18 +388,26 @@ function App() {
       return assessment ? { ...asset, selected: assessment.keep } : asset
     }))
     setHeroAssetId(suggestedHero?.assetId ?? null)
+    if (sharePreviewUrl) {
+      URL.revokeObjectURL(sharePreviewUrl)
+    }
     setShareImage(null)
+    setSharePreviewUrl(null)
     invalidateDelivery()
-    setNotice(`Applied Gemini’s delivery plan: ${analysis.photoAssessments.filter((assessment) => assessment.keep).length} photos are queued for your editor.`)
+    setNotice(`Updated the editor queue with Gemini’s plan: ${analysis.photoAssessments.filter((assessment) => assessment.keep).length} photos are queued. Create AI derivatives separately when you are ready to spend your own API quota.`)
   }
 
   async function runGeminiAnalysis(): Promise<void> {
+    const controller = beginGeminiRequest()
     setPendingAction(null)
     setBusy('gemini')
     setError(null)
     setNotice(null)
     try {
-      const result = await analyseProjectPhotos(projectName, assets, editBrief, geminiApiKey)
+      const result = await analyseProjectPhotos(projectName, assets, editBrief, geminiApiKey, controller.signal)
+      if (controller.signal.aborted) {
+        return
+      }
       setAnalysis({ ...result, userEditBrief: editBrief })
       const suggestedHero = result.photoAssessments.find((assessment) => assessment.keep && assessment.role === 'hero')
         ?? result.photoAssessments.find((assessment) => assessment.keep)
@@ -287,9 +421,11 @@ function App() {
       }
       setNotice('Gemini review is ready. Every suggestion remains editable.')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Gemini review was unavailable.')
+      if (!controller.signal.aborted) {
+        setError(reason instanceof Error ? reason.message : 'Gemini review was unavailable.')
+      }
     } finally {
-      setBusy(null)
+      finishGeminiRequest(controller)
     }
   }
 
@@ -315,6 +451,17 @@ function App() {
     } finally {
       setBusy(null)
     }
+  }
+
+  function removeRenderedCard(): void {
+    if (!sharePreviewUrl) {
+      return
+    }
+    URL.revokeObjectURL(sharePreviewUrl)
+    setShareImage(null)
+    setSharePreviewUrl(null)
+    invalidateDelivery()
+    setNotice('Rendered share card removed. Your source photo and caption stay in place for another render.')
   }
 
   async function completeExport(): Promise<void> {
@@ -491,7 +638,10 @@ function App() {
           <label htmlFor="project-name">Passion project</label>
           <input id="project-name" value={projectName} onChange={(event) => setProjectName(event.target.value)} maxLength={80} />
         </div>
-        <p>Nothing leaves this device until you confirm analysis, an export, or an optional receipt.</p>
+        <div className="project-actions">
+          <p>Nothing leaves this device until you confirm analysis, an export, or an optional receipt.</p>
+          <button type="button" className="button secondary" onClick={resetPhotoProject}>Start new project</button>
+        </div>
       </section>
 
       {notice && <div className="notice" role="status">{notice}<button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notice">×</button></div>}
@@ -566,13 +716,15 @@ function App() {
           </button>
           <p className="consent-hint">Only the selected sources and your project name are sent after you confirm.</p>
           {busy === 'gemini' && <div className="analysis-pending" role="status">Building a plan for {selectedAssets.length} selected {selectedAssets.length === 1 ? 'photo' : 'photos'}… your local queue stays editable.</div>}
+          {batchEditProgress && <div className="analysis-pending" role="status">Creating AI derivatives: {batchEditProgress.completed} of {batchEditProgress.total} complete. Originals remain unchanged.</div>}
 
           {analysis ? (
             <div className="analysis-result">
               <p className="analysis-summary">{analysis.photoAssessments.filter((assessment) => assessment.keep).length} of {analysis.photoAssessments.length} photos are recommended for the editor queue.</p>
               <p className="editor-needed-summary"><strong>Needs editor work · {recommendedEditorAssets.length}</strong>{recommendedEditorAssets.length > 0 ? <span>{recommendedEditorAssets.map((asset) => asset.file.name).join(' · ')}</span> : <span>No photos are recommended for editor handoff.</span>}</p>
-              <button type="button" className="button secondary full" onClick={applyGeminiPlan}>Apply Gemini plan to editor queue</button>
-              <p className="consent-hint">This only changes PassionFlow’s export queue. It never changes the original files.</p>
+              <button type="button" className="button secondary full" disabled={busy === 'batchImageEdit'} onClick={applyGeminiPlanToQueue}>Apply plan to editor queue</button>
+              <button type="button" className="button primary full" disabled={busy === 'imageEdit' || busy === 'batchImageEdit'} onClick={() => setPendingAction('applyEdits')}>{busy === 'batchImageEdit' ? 'Creating planned AI derivatives…' : 'Create AI derivatives from plan'}</button>
+              <p className="consent-hint">The queue action only selects originals for handoff. Creating derivatives is a separate, confirmed request that uses your own Gemini API quota; originals are never changed.</p>
               {analysis.privacyNotice && <p className="privacy-note">{analysis.privacyNotice}</p>}
             </div>
           ) : (
@@ -589,8 +741,8 @@ function App() {
               <h2 id="triage-heading">Review every photo before it leaves your device.</h2>
             </div>
             <div className="triage-actions">
-              <p>Green is Gemini’s editing recommendation. Blue is the current export queue. Apply plan makes the queue match the recommendation.</p>
-              <button type="button" className="button primary" onClick={applyGeminiPlan}>Apply plan</button>
+              <p>Green is Gemini’s editing recommendation. Blue is the current export queue. Queueing originals does not create an edit; use the confirmed derivative action when you want generated results.</p>
+              <button type="button" className="button primary" disabled={busy === 'batchImageEdit'} onClick={applyGeminiPlanToQueue}>Apply plan to queue</button>
             </div>
           </div>
 
@@ -623,7 +775,7 @@ function App() {
                     <div className="triage-controls">
                       <button type="button" className="button secondary" onClick={() => chooseSharePhoto(asset.id)}>{isHero ? 'Share photo selected' : 'Use as share photo'}</button>
                       <button type="button" className="text-action" onClick={() => setDeliverySelection(asset.id, !asset.selected)}>{asset.selected ? 'Skip from editor handoff' : 'Queue for editor'}</button>
-                      {needsEditorWork && <button type="button" className="button dark" disabled={busy === 'imageEdit'} onClick={() => createAiDerivative(asset)}>{busy === 'imageEdit' ? 'Creating AI derivative…' : 'Create AI derivative'}</button>}
+                      {needsEditorWork && <button type="button" className="button dark" disabled={busy === 'imageEdit' || busy === 'batchImageEdit'} onClick={() => createAiDerivative(asset)}>{busy === 'imageEdit' ? 'Creating AI derivative…' : 'Create AI derivative'}</button>}
                       {derivative ? (
                         <button type="button" className="text-action" onClick={() => setComparisonAssetId(asset.id)}>Review returned edit · {derivative.status.replace('_', ' ')}</button>
                       ) : (
@@ -701,6 +853,7 @@ function App() {
             <button type="button" className="button dark full" disabled={!sourceAsset || busy === 'render'} onClick={renderCard}>
               {busy === 'render' ? 'Rendering share card…' : 'Render share card'}
             </button>
+            {sharePreviewUrl && <button type="button" className="button secondary full" onClick={removeRenderedCard}>Remove rendered card</button>}
           </section>
 
           <section className="share-preview" aria-label="Rendered share card preview">
@@ -778,6 +931,17 @@ function App() {
             <h2 id="gemini-consent-title">Send {selectedAssets.length} selected {selectedAssets.length === 1 ? 'source' : 'sources'} for analysis?</h2>
             <p>Gemini receives the selected images and project name to suggest photo roles, a non-destructive edit brief, and share ideas. Do not include confidential documents, private identifiers, or images you do not have permission to process.</p>
             <div className="modal-actions"><button type="button" className="button secondary" onClick={() => setPendingAction(null)}>Keep local</button><button type="button" className="button primary" onClick={runGeminiAnalysis}>Continue to Gemini</button></div>
+          </section>
+        </div>
+      )}
+
+      {pendingAction === 'applyEdits' && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="apply-edits-title">
+            <span className="modal-kicker">Confirm AI derivatives</span>
+            <h2 id="apply-edits-title">Create Gemini derivatives for the planned photos?</h2>
+            <p>PassionFlow will send each photo Gemini marked for editing, its plan, and your preservation constraints. This uses your Gemini API quota and creates separate derivatives; originals stay unchanged.</p>
+            <div className="modal-actions"><button type="button" className="button secondary" onClick={() => setPendingAction(null)}>Keep originals only</button><button type="button" className="button primary" onClick={createPlannedAiDerivatives}>Create AI derivatives</button></div>
           </section>
         </div>
       )}
