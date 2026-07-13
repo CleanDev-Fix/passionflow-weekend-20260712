@@ -216,7 +216,7 @@ app.post('/api/generate-meme-image', async (request, response) => {
         mimeType: interaction.output_image.mime_type || 'image/png',
       },
     })
-  } catch (error) {
+  } catch {
     console.error('Gemini meme image generation failed')
     response.status(502).json({ error: 'Gemini could not generate the meme image. Nothing was posted or saved remotely.' })
   }
@@ -256,7 +256,7 @@ app.post('/api/create-photo-derivative', async (request, response) => {
         mimeType: interaction.output_image.mime_type || 'image/png',
       },
     })
-  } catch (error) {
+  } catch {
     console.error('Gemini photo derivative generation failed')
     response.status(502).json({ error: 'The AI editor could not create a derivative. Your original remains local.' })
   }
