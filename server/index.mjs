@@ -75,18 +75,19 @@ const photoAnalysisSchema = z.object({
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
-const ai = new GoogleGenAI({})
 
 function hasLocalGeminiAccess() {
   return process.env.PASSIONFLOW_ALLOW_SERVER_GEMINI === 'local-development'
     && Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)
 }
 
+const localAi = hasLocalGeminiAccess() ? new GoogleGenAI({}) : null
+
 function getGeminiClient(apiKey) {
   if (apiKey) {
     return new GoogleGenAI({ apiKey })
   }
-  return hasLocalGeminiAccess() ? ai : null
+  return localAi
 }
 
 app.use(express.json({ limit: '30mb' }))
