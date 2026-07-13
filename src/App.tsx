@@ -27,6 +27,8 @@ function App() {
   const geminiAbortRef = useRef<AbortController | null>(null)
   const [projectName, setProjectName] = useState('Vintage camera restoration')
   const [editBrief, setEditBrief] = useState({ desiredOutcome: '', preservationConstraints: '' })
+  const [mode, setMode] = useState<'photo' | 'meme'>('photo')
+  const [geminiStatus, setGeminiStatus] = useState<'checking' | 'local' | 'unavailable'>('checking')
   const [geminiApiKey, setGeminiApiKey] = useState('')
   const [assets, setAssets] = useState<MediaAsset[]>([])
   const [analysis, setAnalysis] = useState<PhotoAnalysis | null>(null)
@@ -144,6 +146,13 @@ function App() {
 
   useEffect(() => {
     getEditorProvider().then(setEditorProvider).catch(() => setEditorProvider(null))
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/provider-status')
+      .then((response) => response.ok ? response.json() as Promise<{ localGeminiAvailable: boolean }> : Promise.reject(new Error('Provider status unavailable')))
+      .then((status) => setGeminiStatus(status.localGeminiAvailable ? 'local' : 'unavailable'))
+      .catch(() => setGeminiStatus('unavailable'))
   }, [])
 
   async function handleIncomingFiles(event: ChangeEvent<HTMLInputElement>): Promise<void> {
@@ -615,14 +624,24 @@ function App() {
           <span className="brand-mark" aria-hidden="true"><span className="flowfinder-iris"></span><span className="flowfinder-notch notch-one"></span><span className="flowfinder-notch notch-two"></span><span className="flowfinder-focus"></span></span>
           <span>PassionFlow</span>
         </a>
-        <nav className="mode-nav" aria-label="PassionFlow modes"><a href="#photo-flow">Photo Flow</a><a href="#meme-studio">Meme Studio</a></nav>
+        <nav className="mode-nav" aria-label="PassionFlow modes">
+          <button type="button" className={mode === 'photo' ? 'active' : ''} aria-pressed={mode === 'photo'} onClick={() => setMode('photo')}>Photo workflow</button>
+          <button type="button" className={mode === 'meme' ? 'active' : ''} aria-pressed={mode === 'meme'} onClick={() => setMode('meme')}>Meme studio</button>
+        </nav>
         <span className="local-status"><span aria-hidden="true"></span> Local-first</span>
       </header>
       <section className="hero" id="top">
-        <div className="eyebrow">The optical bench</div>
-        <h1>Make the image. Keep the decision.</h1>
-        <p>Run a deliberate photo workflow, or turn a moment into a meme visual—without turning your work into a chat thread.</p>
+        <div>
+          <div className="eyebrow">{mode === 'photo' ? 'Photo workflow' : 'Share lab'}</div>
+          <h1>{mode === 'photo' ? 'A clean path from camera roll to final edit.' : 'Build the visual. Keep the caption yours.'}</h1>
+          <p>{mode === 'photo' ? 'Ingest an original, define the change, create one reviewable derivative, then hand off the approved result.' : 'Start from a brief or a reference. Generate the visual, then render every caption locally.'}</p>
+        </div>
+        <dl className="hero-metrics" aria-label="Current workspace status">
+          <div><dt>Queued</dt><dd>{selectedAssets.length}</dd></div>
+          <div><dt>Derivatives</dt><dd>{derivatives.length}</dd></div>
+        </dl>
       </section>
+      {mode === 'photo' && <>
 
       <nav className="stage-nav" aria-label="Workflow steps">
         {stages.map((stage) => (
@@ -706,12 +725,14 @@ function App() {
             <label htmlFor="preservation-constraints">What must stay true?</label>
             <textarea id="preservation-constraints" value={editBrief.preservationConstraints} onChange={(event) => { setEditBrief((current) => ({ ...current, preservationConstraints: event.target.value })); if (analysis) setAnalysis(null) }} placeholder="Keep colors, labels, wear, and all meaningful details honest." rows={3} maxLength={420} />
           </div>
-          <div className="api-key-entry">
-            <label htmlFor="gemini-api-key">Your Gemini API key <span>required for public use</span></label>
-            <input id="gemini-api-key" type="password" autoComplete="off" value={geminiApiKey} onChange={(event) => setGeminiApiKey(event.target.value)} placeholder="Used only for this request" maxLength={1024} />
-            <p>Kept only in this tab’s memory. It is not saved, exported, logged, or shared with other users. A local development server can use its separately configured key.</p>
+          <div className={`provider-state ${geminiStatus}`}>
+            <span aria-hidden="true"></span>
+            <div>
+              <strong>{geminiStatus === 'local' ? 'Gemini connected locally' : geminiStatus === 'checking' ? 'Checking local Gemini connection' : 'Gemini editing is not configured'}</strong>
+              <p>{geminiStatus === 'local' ? 'Your approved local server supplies the credential. It never enters this browser or export package.' : geminiStatus === 'checking' ? 'The workflow is checking the local server before it enables AI work.' : 'This server cannot create derivatives yet. Configure the approved local server before starting a photo plan.'}</p>
+            </div>
           </div>
-          <button type="button" className="button primary full" disabled={selectedAssets.length === 0 || busy === 'gemini'} onClick={() => setPendingAction('gemini')}>
+          <button type="button" className="button primary full" disabled={selectedAssets.length === 0 || busy === 'gemini' || geminiStatus !== 'local'} onClick={() => setPendingAction('gemini')}>
             {busy === 'gemini' ? 'Building photo plan…' : 'Build photo plan'}
           </button>
           <p className="consent-hint">Only the selected sources and your project name are sent after you confirm.</p>
@@ -863,17 +884,6 @@ function App() {
         </div>
       </section>
 
-      <MemeStudio
-        apiKey={geminiApiKey}
-        onError={setError}
-        onNotice={setNotice}
-        onUseForReceipt={(image, caption) => {
-          setShareImage(image)
-          setShareCaption(caption)
-          invalidateDelivery()
-          setNotice('Meme selected for an optional Solana Devnet creator receipt. Complete a local handoff first; the receipt is never required.')
-        }}
-      />
 
       <section className="delivery-strip" aria-labelledby="delivery-heading">
         <div>
@@ -919,6 +929,24 @@ function App() {
           ) : (
             <p className="receipt-unavailable">A compatible browser wallet is needed for an optional Devnet receipt. Your local handoff is complete without one.</p>
           )}
+        </section>
+      )}
+      </>}
+
+      {mode === 'meme' && (
+        <section className="meme-mode panel">
+          <MemeStudio
+            apiKey={geminiApiKey}
+            onError={setError}
+            onNotice={setNotice}
+            onUseForReceipt={(image, caption) => {
+              setShareImage(image)
+              setShareCaption(caption)
+              invalidateDelivery()
+              setMode('photo')
+              setNotice('Meme selected for the optional creator receipt. Complete a local handoff in Photo workflow first.')
+            }}
+          />
         </section>
       )}
 

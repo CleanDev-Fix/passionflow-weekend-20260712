@@ -90,7 +90,30 @@ function getGeminiClient(apiKey) {
   return localAi
 }
 
+function imageFromInteraction(interaction) {
+  if (interaction.output_image?.data) {
+    return interaction.output_image
+  }
+
+  for (const step of interaction.steps ?? []) {
+    for (const block of step.content ?? []) {
+      if (block.type === 'image' && block.data) {
+        return block
+      }
+    }
+  }
+
+  return null
+}
+
 app.use(express.json({ limit: '30mb' }))
+
+app.get('/api/provider-status', (_request, response) => {
+  response.json({
+    localGeminiAvailable: Boolean(localAi),
+    cloudEditingConfigured: Boolean(localAi),
+  })
+})
 
 const editorHandoffSchema = requestSchema.extend({
   manifest: z.record(z.string(), z.unknown()),
@@ -206,15 +229,16 @@ app.post('/api/generate-meme-image', async (request, response) => {
       store: false,
       input: reference ? [{ type: 'text', text: prompt }, { type: 'image', data: reference.data, mime_type: reference.mimeType }] : prompt,
     })
-    if (!interaction.output_image?.data) {
+    const image = imageFromInteraction(interaction)
+    if (!image) {
       response.status(502).json({ error: 'Gemini did not return a usable meme image. Adjust the direction and try again.' })
       return
     }
 
     response.status(200).json({
       image: {
-        data: interaction.output_image.data,
-        mimeType: interaction.output_image.mime_type || 'image/png',
+        data: image.data,
+        mimeType: image.mime_type || 'image/png',
       },
     })
   } catch {
@@ -246,15 +270,16 @@ app.post('/api/create-photo-derivative', async (request, response) => {
       store: false,
       input: [{ type: 'text', text: prompt }, { type: 'image', data: asset.data, mime_type: asset.mimeType }],
     })
-    if (!interaction.output_image?.data) {
+    const image = imageFromInteraction(interaction)
+    if (!image) {
       response.status(502).json({ error: 'The AI editor did not return a usable derivative. Your original remains local.' })
       return
     }
 
     response.status(200).json({
       image: {
-        data: interaction.output_image.data,
-        mimeType: interaction.output_image.mime_type || 'image/png',
+        data: image.data,
+        mimeType: image.mime_type || 'image/png',
       },
     })
   } catch {
